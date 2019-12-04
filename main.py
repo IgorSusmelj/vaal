@@ -74,6 +74,11 @@ def main(args):
     splits = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
 
     current_indices = list(initial_indices)
+    
+    random_indices = random.sample(all_indices, args.initial_budget)
+    random_sampler = data.sampler.SubsetRandomSampler(random_indices)
+    querry_dataloader_rnd = data.DataLoader(train_dataset, sampler=random_sampler, 
+            batch_size=args.batch_size, drop_last=True)
 
     accuracies = []
     
@@ -81,8 +86,10 @@ def main(args):
         # need to retrain all the models on the new images
         # re initialize and retrain the models
         task_model = vgg.vgg16_bn(num_classes=args.num_classes)
+        task_model_rnd = vgg.vgg16_bn(num_classes=args.num_classes)
         vae = model.VAE(args.latent_dim)
         discriminator = model.Discriminator(args.latent_dim)
+        
 
         unlabeled_indices = np.setdiff1d(list(all_indices), current_indices)
         unlabeled_sampler = data.sampler.SubsetRandomSampler(unlabeled_indices)
@@ -90,21 +97,31 @@ def main(args):
                 sampler=unlabeled_sampler, batch_size=args.batch_size, drop_last=False)
 
         # train the models on the current data
-        acc, vae, discriminator = solver.train(querry_dataloader,
+        acc, acc_rnd, vae, discriminator = solver.train(querry_dataloader,
+                                               querry_dataloader_rnd,
                                                task_model, 
+                                               task_model_rnd,
                                                vae, 
                                                discriminator,
                                                unlabeled_dataloader)
 
 
         print('Final accuracy with {}% of data is: {:.2f}'.format(int(split*100), acc))
+        print('Final accuracy (rnd) with {}% of data is: {:.2f}'.format(int(split*100), acc_rnd))
+
         accuracies.append(acc)
 
         sampled_indices = solver.sample_for_labeling(vae, discriminator, unlabeled_dataloader)
         current_indices = list(current_indices) + list(sampled_indices)
+        
+        random_indices = random.sample(all_indices, len(current_indices))
+        random_sampler = data.sampler.SubsetRandomSampler(random_indices)
+    
         sampler = data.sampler.SubsetRandomSampler(current_indices)
         querry_dataloader = data.DataLoader(train_dataset, sampler=sampler, 
                 batch_size=args.batch_size, drop_last=True)
+        querry_dataloader_rnd = data.DataLoader(train_dataset, sampler=random_sampler, 
+            batch_size=args.batch_size, drop_last=True)
 
     torch.save(accuracies, os.path.join(args.out_path, args.log_name))
 

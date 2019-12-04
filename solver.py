@@ -35,23 +35,27 @@ class Solver:
                     yield img
 
 
-    def train(self, querry_dataloader, task_model, vae, discriminator, unlabeled_dataloader):
+    def train(self, querry_dataloader, querry_dataloader_rnd, task_model, task_model_rnd, vae, discriminator, unlabeled_dataloader):
         self.args.train_iterations = len(querry_dataloader) * self.args.train_epochs
         labeled_data = self.read_data(querry_dataloader)
+        labeled_data_rnd = self.read_data(querry_dataloader_rnd)
         unlabeled_data = self.read_data(unlabeled_dataloader, labels=False)
 
         optim_vae = optim.Adam(vae.parameters(), lr=5e-4)
         optim_task_model = optim.Adam(task_model.parameters(), lr=5e-4)
+        optim_task_model_rnd = optim.Adam(task_model_rnd.parameters(), lr=5e-4)
         optim_discriminator = optim.Adam(discriminator.parameters(), lr=5e-4)
 
         vae.train()
         discriminator.train()
         task_model.train()
+        task_model_rnd.train()
 
         if self.args.cuda:
             vae = vae.cuda()
             discriminator = discriminator.cuda()
             task_model = task_model.cuda()
+            task_model_rnd = task_model_rnd.cuda()
         
         change_lr_iter = self.args.train_iterations // 25
 
@@ -62,17 +66,24 @@ class Solver:
     
                 for param in optim_task_model.param_groups:
                     param['lr'] = param['lr'] * 0.9 
+                
+                for param in optim_task_model_rnd.param_groups:
+                    param['lr'] = param['lr'] * 0.9 
 
                 for param in optim_discriminator.param_groups:
                     param['lr'] = param['lr'] * 0.9 
 
             labeled_imgs, labels = next(labeled_data)
+            labeled_imgs_rnd, labels_rnd = next(labeled_data_rnd)
             unlabeled_imgs = next(unlabeled_data)
 
             if self.args.cuda:
                 labeled_imgs = labeled_imgs.cuda()
                 unlabeled_imgs = unlabeled_imgs.cuda()
                 labels = labels.cuda()
+                labeled_imgs_rnd = labeled_imgs_rnd.cuda()
+                labels_rnd = labels_rnd.cuda()
+
 
             # task_model step
             preds = task_model(labeled_imgs)
@@ -80,6 +91,13 @@ class Solver:
             optim_task_model.zero_grad()
             task_loss.backward()
             optim_task_model.step()
+            
+            # task_model rnd step
+            preds = task_model_rnd(labeled_imgs_rnd)
+            task_loss_rnd = self.ce_loss(preds, labels_rnd)
+            optim_task_model_rnd.zero_grad()
+            task_loss_rnd.backward()
+            optim_task_model_rnd.step()
 
             # VAE step
             for count in range(self.args.num_vae_steps):
@@ -154,11 +172,14 @@ class Solver:
             if iter_count % 1000 == 0:
                 print('Current training iteration: {}'.format(iter_count))
                 print('Current task model loss: {:.4f}'.format(task_loss.item()))
+                print('Current task model rnd loss: {:.4f}'.format(task_loss_rnd.item()))
                 print('Current vae model loss: {:.4f}'.format(total_vae_loss.item()))
                 print('Current discriminator model loss: {:.4f}'.format(dsc_loss.item()))
 
         final_accuracy = self.test(task_model)
-        return final_accuracy, vae, discriminator
+        final_accuracy_rnd = self.test(task_model_rnd)
+
+        return final_accuracy, final_accuracy_rnd, vae, discriminator
 
 
     def sample_for_labeling(self, vae, discriminator, unlabeled_dataloader):
